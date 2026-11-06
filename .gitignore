@@ -1,0 +1,31 @@
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+
+# Virtual environment
+env/
+venv/
+ENV/
+.venv/
+
+# Streamlit logs & cache
+.streamlit/
+
+# Output directories & simulations
+gui_runs/
+plots/
+plots_*/
+*.mp4
+*.npy
+
+# IDE configuration
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
