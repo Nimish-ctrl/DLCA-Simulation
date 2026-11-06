@@ -4,7 +4,7 @@ A unified scientific laboratory and graphical suite for simulating **Diffusion-L
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 The project is cleanly divided into specialized directories for easy navigation:
 
@@ -63,13 +63,13 @@ dlca_final_project/
 
 ---
 
-## 🌟 Key Capabilities
+## Key Capabilities
 
 - **12 Particle Geometries & Binary Mixtures**: Monodisperse and bidistributed circles, triangles, squares, rectangles, ellipses, and superellipses.
 - **Interactive Web GUI (Streamlit)**:
   - Real-time aggregation monitoring (live particle count, active cluster count, steps/second, dynamic ETA).
   - Live Altair kinetic decay curves tracking cluster dissolution over time.
-  - Interactive **⏹ Stop Simulation** button allowing instant halting with full intermediate data and plot recovery.
+  - Interactive **Stop Simulation** button allowing instant halting with full intermediate data and plot recovery.
   - On-demand or automatic true-geometry MP4 animation rendering via `imageio-ffmpeg`.
   - Comprehensive run history browser with instant download buttons for high-resolution PNGs and MP4s.
 - **Scientific Analysis & Data Export**:
@@ -78,7 +78,7 @@ dlca_final_project/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Prerequisites
 Ensure you have **Python 3.9+** installed.
@@ -104,12 +104,12 @@ http://localhost:8501
 
 ---
 
-## ⚙️ How to Use the GUI
+## How to Use the GUI
 
 1. **Select Geometry & Parameters**: Use the left sidebar to choose particle shapes, dispersion mode, arena domain dimensions, and initial packing density (by area fraction $\phi$ or particle count $N$).
-2. **Launch Simulation**: Click **`▶ Launch DLCA Simulation`**.
+2. **Launch Simulation**: Click **`Launch DLCA Simulation`**.
 3. **Monitor Live Progress**: Watch the live step-by-step counter, cluster merge rate, speed, ETA, and real-time kinetic decay curve.
-4. **Instant Halting (Stop/Cancel)**: Click **`⏹ Stop Simulation`** at any point. All intermediate particle coordinates, trajectories, and plots are safely preserved on disk.
+4. **Instant Halting (Stop/Cancel)**: Click **`Stop Simulation`** at any point. All intermediate particle coordinates, trajectories, and plots are safely preserved on disk.
 5. **View & Export Results**:
    - Inspect the high-resolution final structure snapshot.
    - Download `.png` plots for papers or presentations.
@@ -118,7 +118,7 @@ http://localhost:8501
 
 ---
 
-## 📦 Output Artifacts
+## Output Artifacts
 
 All simulation runs are automatically cataloged inside the `gui_runs/` folder:
 - `summary.json`: Detailed simulation metadata (runtime, particle counts, final clusters, parameters).
@@ -129,5 +129,5 @@ All simulation runs are automatically cataloged inside the `gui_runs/` folder:
 
 ---
 
-## 📄 License
+## License
 This project is open-source and available under the MIT License.
