@@ -21,7 +21,7 @@ import matplotlib.patches as patches
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from collisions import (
+from collisions.collisions import (
     create_equilateral_triangle_vertices,
     get_polygon_corners,
     get_triangle_corners,

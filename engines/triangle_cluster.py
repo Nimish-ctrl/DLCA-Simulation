@@ -1,21 +1,36 @@
 """
-triangle_same_size_cluster.py — rigid contacts, no overlaps (single-size triangles)
-Triangle-Triangle Cluster Simulation with Monodisperse Triangles and Slow Rotation
+triangle_cluster.py — Generalized Triangle DLCA Simulation
+Supports 4 triangle types: Equilateral, Right-Angled, Isosceles, and Scalene.
+Uses stored local vertices, SAT/MTV collision physics, area-based mass proxy,
+unbiased Brownian rotation, and spatial-grid acceleration.
 """
 
+import sys
+import argparse
 import random
 import math
 import time
 import json
 import os
 from collections import defaultdict
-from collisions import dist, get_triangle_corners, project_polygon, get_mtv_triangle_triangle
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from collisions.collisions import (
+    create_equilateral_triangle_vertices,
+    create_right_triangle_vertices,
+    create_isosceles_triangle_vertices,
+    create_scalene_triangle_vertices,
+    get_triangle_bounding_radius,
+    get_triangle_area,
+    get_triangle_self_inertia_ratio,
+    get_triangle_corners,
+    get_mtv_triangle_triangle
+)
+
 # ---------------------------
-# Config
+# Global Configuration
 # ---------------------------
 width = 1600
 height = 1200
@@ -23,7 +38,6 @@ height = 1200
 spawn_width = 800
 spawn_height = 600
 
-# spawn origin (top-left corner) — center the spawn box by default:
 spawn_x0 = (width - spawn_width) / 2.0
 spawn_y0 = (height - spawn_height) / 2.0
 
@@ -32,21 +46,22 @@ max_time = 40000
 min_mass = 10.0
 min_Rg = 1e-8
 min_pts_for_fit = 6
-save_dir = "sim_npy_out_triangle_single"
-save_plots = "plots_triangle_single"
-store_every_k = 1
-repeats = 1
 
-# Visible contact gap and extra safety push (pixels)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+save_dir = os.path.join(SCRIPT_DIR, "sim_npy_out_triangle")
+save_plots = os.path.join(SCRIPT_DIR, "plots_triangle")
+store_every_k = 1
+
+# Contact gap and safety push
 EPS_CONTACT = 1.0
 EPS_PUSH    = 0.2
 
-# Unbiased rotation (bidirectional Brownian rotational jitter)
-ROT_OMEGA_BASE = 0.0     # zero systematic drift
-ROT_BROWNIAN   = 0.02    # symmetric clockwise/counter-clockwise jitter
+# Unbiased Brownian rotation parameters
+ROT_OMEGA_BASE = 0.0     # zero directional bias
+ROT_BROWNIAN   = 0.03    # symmetric Brownian rotational jitter
 
 # ---------------------------
-# Grid helpers
+# Grid & Geometry Helpers
 # ---------------------------
 def distance(x1, y1, x2, y2):
     return (x2 - x1) ** 2 + (y2 - y1) ** 2
@@ -67,22 +82,22 @@ def insert_into_grid(p, grid, cell_size):
     if 0 <= i < len(grid) and 0 <= j < len(grid[0]):
         grid[i][j].append(p)
 
-def check(particles, x, y, r, grid, cell_size):
+def check_spawn_overlap(particles, x, y, r_bound, grid, cell_size):
     cell_x, cell_y = int(x / cell_size), int(y / cell_size)
     for i in range(max(0, cell_x - 1), min(len(grid), cell_x + 2)):
         for j in range(max(0, cell_y - 1), min(len(grid[0]), cell_y + 2)):
             for p in grid[i][j]:
-                if distance(x, y, p['x'], p['y']) <= (r + p['r'])**2:
+                if distance(x, y, p['x'], p['y']) <= (r_bound + p['r_bound'])**2:
                     return False
     return True
 
 def keep_cluster_inside_bounds(cluster, width, height):
     if not cluster:
         return
-    min_x = min(p['x'] - p['r'] for p in cluster)
-    max_x = max(p['x'] + p['r'] for p in cluster)
-    min_y = min(p['y'] - p['r'] for p in cluster)
-    max_y = max(p['y'] + p['r'] for p in cluster)
+    min_x = min(p['x'] - p['r_bound'] for p in cluster)
+    max_x = max(p['x'] + p['r_bound'] for p in cluster)
+    min_y = min(p['y'] - p['r_bound'] for p in cluster)
+    max_y = max(p['y'] + p['r_bound'] for p in cluster)
 
     dx = 0.0
     dy = 0.0
@@ -106,46 +121,48 @@ def enforce_world_bounds_all(particles, width, height):
         keep_cluster_inside_bounds(cluster, width, height)
 
 # ---------------------------
-# Cluster utilities
+# Cluster Utilities (Area as Mass Proxy)
 # ---------------------------
 def get_cluster_properties(cluster_particles):
-    total_mass = sum(p['r'] ** 2 for p in cluster_particles)
+    total_mass = sum(p['area'] for p in cluster_particles)
     if total_mass == 0:
         return 0.0, 0.0, 0.0, 0.0, 0.0
-    com_x = sum(p['x'] * p['r'] ** 2 for p in cluster_particles) / total_mass
-    com_y = sum(p['y'] * p['r'] ** 2 for p in cluster_particles) / total_mass
-    avg_vx = sum(velocity / p['r'] * math.cos(p.get('angle', 0)) for p in cluster_particles) / len(cluster_particles)
-    avg_vy = sum(velocity / p['r'] * math.sin(p.get('angle', 0)) for p in cluster_particles) / len(cluster_particles)
-    velocity_scale = 1 / (1 + math.log(1 + total_mass / 1000))
+    com_x = sum(p['x'] * p['area'] for p in cluster_particles) / total_mass
+    com_y = sum(p['y'] * p['area'] for p in cluster_particles) / total_mass
+    avg_vx = sum(velocity / p['r_bound'] * math.cos(p.get('angle', 0)) for p in cluster_particles) / len(cluster_particles)
+    avg_vy = sum(velocity / p['r_bound'] * math.sin(p.get('angle', 0)) for p in cluster_particles) / len(cluster_particles)
+    velocity_scale = 1.0 / (1.0 + math.log(1.0 + total_mass / 1000.0))
     avg_vx *= velocity_scale
     avg_vy *= velocity_scale
     return com_x, com_y, avg_vx, avg_vy, total_mass
 
 def radius_of_gyration(cluster):
     """
-    Computes radius of gyration including continuous self-inertia correction
-    for uniform 2D equilateral triangles: I_self / m = (23/108) * r^2
-    (Analogue to the +3/5 * R^2 term for 3D solid spheres in DLCA literature).
+    Computes radius of gyration using exact polygon area and self-moment-of-inertia.
+    R_g = sqrt( sum( m_i * ( ||x_i - x_com||^2 + I_self / m_i ) ) / M )
     """
     if not cluster:
         return 0.0
-    masses = [p['r']**2 for p in cluster]
+    masses = [p['area'] for p in cluster]
     M = sum(masses)
     if M == 0:
         return 0.0
-    com_x = sum(p['x']*m for p, m in zip(cluster, masses)) / M
-    com_y = sum(p['y']*m for p, m in zip(cluster, masses)) / M
-    rg2 = sum(m * ((p['x'] - com_x)**2 + (p['y'] - com_y)**2 + (23.0 / 108.0) * (p['r']**2)) for p, m in zip(cluster, masses)) / M
+    com_x = sum(p['x'] * m for p, m in zip(cluster, masses)) / M
+    com_y = sum(p['y'] * m for p, m in zip(cluster, masses)) / M
+    rg2 = sum(
+        m * ((p['x'] - com_x)**2 + (p['y'] - com_y)**2 + p.get('self_inertia_ratio', 0.0))
+        for p, m in zip(cluster, masses)
+    ) / M
     return math.sqrt(max(0.0, rg2))
 
 def cluster_mass(cluster):
-    return sum(p['r']**2 for p in cluster)
+    return sum(p['area'] for p in cluster)
 
 def check_one_cluster(particles):
     return len(set(p['cluster_id'] for p in particles)) == 1
 
 # ---------------------------
-# Rigid contact separation
+# Rigid Contact Separation (SAT / MTV)
 # ---------------------------
 def _move_cluster(cluster, dx, dy):
     for q in cluster:
@@ -160,7 +177,7 @@ def rebuild_cluster_members(particles):
         p['cluster_members'] = by_id[p['cluster_id']]
 
 def _cluster_mass(cluster):
-    return sum(pp['r']**2 for pp in cluster)
+    return sum(pp['area'] for pp in cluster)
 
 def resolve_overlap_pair_as_clusters(p1, p2, eps=EPS_CONTACT):
     if p1['cluster_id'] == p2['cluster_id']:
@@ -168,11 +185,11 @@ def resolve_overlap_pair_as_clusters(p1, p2, eps=EPS_CONTACT):
 
     # 1. Cheap Reject (Bounding circumradius check)
     dist_sq = (p1['x'] - p2['x'])**2 + (p1['y'] - p2['y'])**2
-    safe_dist = (p1['r'] + p2['r']) + eps
+    safe_dist = (p1['r_bound'] + p2['r_bound']) + eps
     if dist_sq > safe_dist**2:
         return False
 
-    # 2. SAT Check (Accurate Triangle-Triangle)
+    # 2. Exact Polygon SAT Check
     res = get_mtv_triangle_triangle(p1, p2, eps=1e-9)
     if res is None:
         return False
@@ -212,7 +229,7 @@ def fully_separate_two_clusters(particles, grid, cell_size, cid1, cid2, eps=EPS_
                 dx = a['x'] - b['x']
                 dy = a['y'] - b['y']
                 d2 = dx*dx + dy*dy
-                limit = ((a['r'] + b['r']) + eps)**2
+                limit = ((a['r_bound'] + b['r_bound']) + eps)**2
                 
                 if d2 < limit:
                     if resolve_overlap_pair_as_clusters(a, b, eps=eps):
@@ -224,11 +241,11 @@ def rotate_cluster_about_com(cluster, angle_rad):
     if not cluster or angle_rad == 0.0:
         return
 
-    M = sum(p['r']**2 for p in cluster)
+    M = sum(p['area'] for p in cluster)
     if M <= 0.0:
         return
-    cx = sum(p['x'] * (p['r']**2) for p in cluster) / M
-    cy = sum(p['y'] * (p['r']**2) for p in cluster) / M
+    cx = sum(p['x'] * p['area'] for p in cluster) / M
+    cy = sum(p['y'] * p['area'] for p in cluster) / M
 
     c = math.cos(angle_rad)
     s = math.sin(angle_rad)
@@ -251,11 +268,11 @@ def rotate_all_clusters(particles, grid, cell_size,
     for cid, cluster in clusters.items():
         if not cluster:
             continue
-        M = sum(p['r']**2 for p in cluster)
+        M = sum(p['area'] for p in cluster)
         if M <= 0.0:
             continue
         mass_scale = 1.0 / (1.0 + math.log(1.0 + M / 1000.0))
-        # Purely symmetric, unbiased Brownian torque (equal probability of clockwise and counter-clockwise)
+        # Unbiased symmetric Brownian rotational torque
         jitter = random.uniform(-omega_brownian, omega_brownian) * mass_scale
         angle = (omega_base + jitter) * dt
 
@@ -271,22 +288,22 @@ def resolve_all_overlaps_rigid(particles, grid, cell_size, passes=2, eps=EPS_CON
 
         for i in range(len(particles)):
             p1 = particles[i]
-            cx, cy = int(p1['x']/cell_size), int(p1['y']/cell_size)
-            
-            for gx in range(max(0, cx-1), min(len(grid), cx+2)):
-                for gy in range(max(0, cy-1), min(len(grid[0]), cy+2)):
+            cx, cy = int(p1['x'] / cell_size), int(p1['y'] / cell_size)
+
+            for gx in range(max(0, cx - 1), min(len(grid), cx + 2)):
+                for gy in range(max(0, cy - 1), min(len(grid[0]), cy + 2)):
                     for p2 in grid[gx][gy]:
                         if p1 is p2 or p1['cluster_id'] == p2['cluster_id']:
                             continue
-                        
+
                         c_pair = tuple(sorted((p1['cluster_id'], p2['cluster_id'])))
                         if c_pair in processed_pairs:
-                            continue 
+                            continue
 
-                        rs = p1['r'] + p2['r']
+                        rs = p1['r_bound'] + p2['r_bound']
                         dist_sq = (p1['x'] - p2['x'])**2 + (p1['y'] - p2['y'])**2
                         threshold = (rs + eps)**2
-                        
+
                         if dist_sq < threshold:
                             if resolve_overlap_pair_as_clusters(p1, p2, eps=eps):
                                 moved_any = True
@@ -303,7 +320,7 @@ def enforce_eps_gap_all(particles, grid, cell_size, eps=EPS_CONTACT, max_rounds=
     enforce_world_bounds_all(particles, width, height)
 
 # ---------------------------
-# Merge, collisions, movement
+# Merge, Collisions & Movement
 # ---------------------------
 def merge_clusters(particles, cluster_id1, cluster_id2):
     cluster1 = [p for p in particles if p['cluster_id'] == cluster_id1]
@@ -316,8 +333,8 @@ def merge_clusters(particles, cluster_id1, cluster_id2):
     merged_members = [p for p in particles if p['cluster_id'] == new_cluster_id]
     for p in merged_members:
         p['cluster_members'] = merged_members
-    mass1 = sum(p['r'] ** 2 for p in cluster1)
-    mass2 = sum(p['r'] ** 2 for p in cluster2)
+    mass1 = sum(p['area'] for p in cluster1)
+    mass2 = sum(p['area'] for p in cluster2)
     total_mass = mass1 + mass2
     _, _, vx1, vy1, _ = get_cluster_properties(cluster1)
     _, _, vx2, vy2, _ = get_cluster_properties(cluster2)
@@ -335,7 +352,7 @@ def check_collision_and_merge(p1, p2, grid, cell_size):
         return False
 
     dist_sq = (p1['x'] - p2['x'])**2 + (p1['y'] - p2['y'])**2
-    if dist_sq > (p1['r'] + p2['r'] + EPS_CONTACT)**2:
+    if dist_sq > (p1['r_bound'] + p2['r_bound'] + EPS_CONTACT)**2:
         return False
 
     if resolve_overlap_pair_as_clusters(p1, p2, eps=EPS_CONTACT * 1.1):
@@ -351,19 +368,19 @@ def update_cluster_movement(particles, grid, cell_size):
     for cluster_id, cluster in clusters.items():
         if not cluster:
             continue
-        total_mass = sum(p['r'] ** 2 for p in cluster)
-        com_x = sum(p['x'] * p['r'] ** 2 for p in cluster) / total_mass
-        com_y = sum(p['y'] * p['r'] ** 2 for p in cluster) / total_mass
-        avg_vx = sum(velocity / p['r'] * math.cos(p.get('angle', 0)) for p in cluster) / len(cluster)
-        avg_vy = sum(velocity / p['r'] * math.sin(p.get('angle', 0)) for p in cluster) / len(cluster)
-        vel_scale = 1 / (1 + math.log(1 + total_mass / 1000))
+        total_mass = sum(p['area'] for p in cluster)
+        com_x = sum(p['x'] * p['area'] for p in cluster) / total_mass
+        com_y = sum(p['y'] * p['area'] for p in cluster) / total_mass
+        avg_vx = sum(velocity / p['r_bound'] * math.cos(p.get('angle', 0)) for p in cluster) / len(cluster)
+        avg_vy = sum(velocity / p['r_bound'] * math.sin(p.get('angle', 0)) for p in cluster) / len(cluster)
+        vel_scale = 1.0 / (1.0 + math.log(1.0 + total_mass / 1000.0))
         avg_vx *= vel_scale; avg_vy *= vel_scale
         br_angle = random.uniform(0, 2 * math.pi)
-        mf = 1 / max(total_mass, 1e-12) ** 0.3
+        mf = 1.0 / max(total_mass, 1e-12) ** 0.3
         dx = avg_vx + velocity * mf * math.cos(br_angle)
         dy = avg_vy + velocity * mf * math.sin(br_angle)
         final_angle = br_angle
-        offsets = [(p['x'] - com_x, p['y'] - com_y, p['r']) for p in cluster]
+        offsets = [(p['x'] - com_x, p['y'] - com_y, p['r_bound']) for p in cluster]
         xs_left = [com_x + dx + ox - r for ox, oy, r in offsets]
         xs_right = [com_x + dx + ox + r for ox, oy, r in offsets]
         ys_top = [com_y + dy + oy - r for ox, oy, r in offsets]
@@ -409,9 +426,58 @@ def compute_rdf(particles, width, height, dr=2.0, max_r=None):
     return r_vals, g_r
 
 # ---------------------------
-# Simulation for single-size triangles
+# Particle Creation Helper
 # ---------------------------
-def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir, seed=None):
+def create_triangle_particle(shape_type, params, x, y, orientation, cluster_id, particle_id):
+    """
+    Creates a triangle particle with local vertices generated based on type:
+    - 'equilateral': params is radius r
+    - 'right': params is (base, height)
+    - 'isosceles': params is (base, height)
+    - 'scalene': params is (side_a, side_b, side_c)
+    """
+    st = shape_type.lower()
+    if st in ['equilateral', 'eq']:
+        r = float(params if isinstance(params, (int, float)) else params[0])
+        verts = create_equilateral_triangle_vertices(r)
+    elif st in ['right', 'right-angled', 'rt']:
+        b, h = float(params[0]), float(params[1])
+        verts = create_right_triangle_vertices(b, h)
+    elif st in ['isosceles', 'iso']:
+        b, h = float(params[0]), float(params[1])
+        verts = create_isosceles_triangle_vertices(b, h)
+    elif st in ['scalene', 'sc']:
+        a, b, c = float(params[0]), float(params[1]), float(params[2])
+        verts = create_scalene_triangle_vertices(a, b, c)
+    else:
+        raise ValueError(f"Unknown triangle type: {shape_type}")
+
+    r_bound = get_triangle_bounding_radius(verts)
+    area = get_triangle_area(verts)
+    self_inertia = get_triangle_self_inertia_ratio(verts)
+
+    return {
+        'x': float(x),
+        'y': float(y),
+        'orientation': float(orientation),
+        'local_vertices': verts,
+        'r_bound': float(r_bound),
+        'r': float(r_bound),  # backwards compatibility
+        'area': float(area),
+        'self_inertia_ratio': float(self_inertia),
+        'shape': 'triangle',
+        'triangle_type': st,
+        'cluster_id': int(cluster_id),
+        'cluster_members': [],
+        'angle': random.uniform(0, 2 * math.pi),
+        'id': int(particle_id)
+    }
+
+# ---------------------------
+# Simulation Runner
+# ---------------------------
+def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1.0,
+                   max_time=10000, store_every_k=1, save_dir=save_dir, seed=None):
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
@@ -419,7 +485,19 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(save_plots, exist_ok=True)
 
-    cell_size = radius * 2
+    if params_B is None or fraction_A >= 1.0:
+        params_B = params_A
+        fraction_A = 1.0
+
+    count_A = int(round(N_total * fraction_A))
+    count_B = N_total - count_A
+
+    # Sample particle to compute max cell size
+    dummy_A = create_triangle_particle(triangle_type, params_A, 0, 0, 0, 0, 0)
+    dummy_B = create_triangle_particle(triangle_type, params_B, 0, 0, 0, 0, 1)
+    max_rbound = max(dummy_A['r_bound'], dummy_B['r_bound'])
+
+    cell_size = max(20.0, max_rbound * 2.2)
     grid_width = math.ceil(width / cell_size)
     grid_height = math.ceil(height / cell_size)
     grid = [[[] for _ in range(grid_height)] for _ in range(grid_width)]
@@ -427,26 +505,22 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     particles = []
     cluster_id_counter = 0
 
-    def place_particles(radius, count):
+    def place_particles(params, count):
         nonlocal cluster_id_counter
         placed = 0
-        max_attempts = 10000
+        max_attempts = 15000
         for _ in range(count):
             attempts = 0
+            # Test particle to get r_bound
+            temp_p = create_triangle_particle(triangle_type, params, 0, 0, 0, 0, 0)
+            rb = temp_p['r_bound']
             while attempts < max_attempts:
-                x = random.uniform(spawn_x0 + radius, spawn_x0 + spawn_width - radius)
-                y = random.uniform(spawn_y0 + radius, spawn_y0 + spawn_height - radius)
-                if check(particles, x, y, radius, grid, cell_size):
-                    particle = {
-                        'x': x, 'y': y, 'r': float(radius), # circumradius
-                        'shape': 'triangle',
-                        'orientation': random.uniform(0, 2*math.pi), # radians
-                        'cluster_id': cluster_id_counter,
-                        'cluster_members': [], 
-                        'angle': random.uniform(0, 2 * math.pi),
-                        'id': len(particles)
-                    }
-                    particles.append(particle)
+                x = random.uniform(spawn_x0 + rb, spawn_x0 + spawn_width - rb)
+                y = random.uniform(spawn_y0 + rb, spawn_y0 + spawn_height - rb)
+                if check_spawn_overlap(particles, x, y, rb, grid, cell_size):
+                    orient = random.uniform(0, 2 * math.pi)
+                    p = create_triangle_particle(triangle_type, params, x, y, orient, cluster_id_counter, len(particles))
+                    particles.append(p)
                     insert_into_grid(particles[-1], grid, cell_size)
                     cluster_id_counter += 1
                     placed += 1
@@ -456,14 +530,17 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
                 print(f"Warning: Could not place particle after {max_attempts} attempts")
         return placed
 
-    place_particles(radius, N_total)
+    place_particles(params_A, count_A)
+    if count_B > 0:
+        place_particles(params_B, count_B)
 
     for p in particles:
         p['cluster_members'] = [p]
 
     num_saved_frames = (max_time // store_every_k) + 60
-    trajectories = np.zeros((num_saved_frames, N_total, 2), dtype=np.float32)
-    orientations = np.zeros((num_saved_frames, N_total), dtype=np.float32)
+    trajectories = np.zeros((num_saved_frames, len(particles), 2), dtype=np.float32)
+    orientations = np.zeros((num_saved_frames, len(particles)), dtype=np.float32)
+    local_verts_arr = np.array([p['local_vertices'] for p in particles], dtype=np.float32)
 
     global_pairs = []
     time_evolution = []
@@ -471,7 +548,7 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     t_save_idx = 0
     start_time = time.time()
 
-    # Initial cleanup
+    # Initial overlap relaxation
     resolve_all_overlaps_rigid(particles, grid, cell_size, passes=2)
     cleanup_until_clean(particles, grid, cell_size, eps=EPS_CONTACT, outer_repeats=2)
     enforce_eps_gap_all(particles, grid, cell_size)
@@ -479,11 +556,11 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     for time_step in range(max_time):
         update_spatial_grid(particles, grid, cell_size)
         
-        # Slow rigid rotation for each cluster
+        # Unbiased Brownian rotation for each cluster
         rotate_all_clusters(particles, grid, cell_size,
-                    omega_base=ROT_OMEGA_BASE,
-                    omega_brownian=ROT_BROWNIAN,
-                    dt=1.0)
+                            omega_base=ROT_OMEGA_BASE,
+                            omega_brownian=ROT_BROWNIAN,
+                            dt=1.0)
 
         checked_pairs = set()
         global particles_ref
@@ -535,8 +612,8 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
             t_save_idx += 1
 
         if check_one_cluster(particles):
-            print("All particles merged into one cluster at time step", time_step)
-            # Hold the final completely formed cluster for 45 extra frames
+            print(f"All particles merged into one cluster at time step {time_step}")
+            # Hold the final cluster for 45 frames
             for _ in range(45):
                 if t_save_idx < num_saved_frames:
                     for idx, p in enumerate(particles):
@@ -577,20 +654,26 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     else:
         Rg_largest = 0.0; M_largest = 0.0; Rg_largest_n = 0.0
 
-    tag = f"N{len(particles)}_r{radius}_t{max_time}"
+    tag = f"{triangle_type}_N{len(particles)}_t{max_time}"
     traj_path = os.path.join(save_dir, f"traj_{tag}.npy")
     orient_path = os.path.join(save_dir, f"orient_{tag}.npy")
+    verts_path = os.path.join(save_dir, f"vertices_{tag}.npy")
     radii_path = os.path.join(save_dir, f"radii_{tag}.npy")
     meta_path = os.path.join(save_dir, f"meta_{tag}.json")
-    
-    radii_per_particle = np.array([p['r'] for p in particles], dtype=np.float32)
 
     np.save(traj_path, trajectories)
-    np.save(radii_path, radii_per_particle)
     np.save(orient_path, orientations)
+    np.save(verts_path, local_verts_arr)
+    np.save(radii_path, np.array([p['r_bound'] for p in particles], dtype=np.float32))
+
     meta = {
-        "radius": radius,
-        "N_total": N_total,
+        "triangle_type": triangle_type,
+        "params_A": params_A if isinstance(params_A, (list, tuple)) else [params_A],
+        "params_B": params_B if isinstance(params_B, (list, tuple)) else [params_B],
+        "fraction_A": fraction_A,
+        "count_A": count_A,
+        "count_B": count_B,
+        "N_total": len(particles),
         "width": width,
         "height": height,
         "max_time": max_time,
@@ -601,25 +684,26 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
+
     enforce_world_bounds_all(particles, width, height)
     
-    # Matplotlib visualization
-    os.makedirs(save_plots, exist_ok=True)
+    # Static plot
     plt.figure(figsize=(12, 8))
     ax = plt.gca()
     for p in particles:
         corners = get_triangle_corners(p)
-        poly = patches.Polygon(corners, closed=True, facecolor='cyan', alpha=0.9)
+        color = 'cyan' if p['id'] < count_A else 'coral'
+        poly = patches.Polygon(corners, closed=True, facecolor=color, alpha=0.85)
         ax.add_patch(poly)
-        outline = patches.Polygon(corners, closed=True, edgecolor='black', facecolor='none', linewidth=0.8)
+        outline = patches.Polygon(corners, closed=True, edgecolor='black', facecolor='none', linewidth=0.6)
         ax.add_patch(outline)
     plt.xlim(0, width); plt.ylim(0, height); plt.gca().set_aspect('equal', adjustable='box')
-    plt.title(f"Final: Single Size Triangles (r={radius}), {len(set(p['cluster_id'] for p in particles))} clusters | N={len(particles)}")
+    plt.title(f"Final: {triangle_type.capitalize()} Triangles | {len(set(p['cluster_id'] for p in particles))} clusters | N={len(particles)}")
     plt.savefig(os.path.join(save_plots, f"final_{tag}.png"), dpi=180, bbox_inches='tight')
     plt.close()
 
     result = {
-        "radius": radius,
+        "triangle_type": triangle_type,
         "Df": float(Df),
         "intercept": float(intercept) if 'intercept' in locals() else None,
         "r2": float(r2) if 'r2' in locals() else None,
@@ -627,13 +711,15 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
         "Rg_largest_n": float(Rg_largest_n),
         "Mass_largest": float(M_largest),
         "traj_path": traj_path,
-        "radii_path": radii_path,
+        "orient_path": orient_path,
+        "verts_path": verts_path,
         "meta_path": meta_path,
         "elapsed_s": float(elapsed),
         "num_global_pairs": int(len(global_pairs)),
         "saved_frames": int(trajectories.shape[0]),
         "num_particles": len(particles),
-        "num_clusters_final": len(set(p['cluster_id'] for p in particles))
+        "num_clusters_final": len(set(p['cluster_id'] for p in particles)),
+        "final_clusters": len(set(p['cluster_id'] for p in particles))
     }
     
     # RDF
@@ -646,85 +732,232 @@ def run_simulation(N_total, radius, max_time, store_every_k=1, save_dir=save_dir
     plt.axhline(1.0, color='gray', linestyle='--', alpha=0.5, label='Random distribution')
     plt.xlabel("Distance r (pixels)")
     plt.ylabel("g(r)")
-    plt.title(f"Radial Distribution Function\nSingle Size Triangles (r={radius}) | N={N_total}")
+    plt.title(f"Radial Distribution Function\n{triangle_type.capitalize()} Triangles | N={len(particles)}")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(save_plots, f"rdf_{tag}.png"), dpi=150)
     plt.close()
+
     return result
 
+# Backward compatible function name
+def run_simulation_for_composition(N_total, radii_pair, fraction_A, max_time=10000,
+                                   store_every_k=1, save_dir=save_dir, seed=None):
+    return run_simulation(
+        N_total=N_total,
+        triangle_type='equilateral',
+        params_A=radii_pair[0],
+        params_B=radii_pair[1],
+        fraction_A=fraction_A,
+        max_time=max_time,
+        store_every_k=store_every_k,
+        save_dir=save_dir,
+        seed=seed
+    )
+
 # ---------------------------
-# Example usage & Tkinter UI
+# Interactive Tkinter GUI
 # ---------------------------
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-def launch_ui():
+def launch_ui(initial_type="equilateral"):
     root = tk.Tk()
-    root.title("Triangle DLCA Runner (Same Size)")
+    root.title("Generalized Triangle DLCA Runner")
 
-    # Vars
+    # Variables
+    type_var = tk.StringVar(value=initial_type.capitalize())
     particles_var = tk.StringVar(value="350")
-    radius_var = tk.StringVar(value="12")
+    fracA_var = tk.StringVar(value="0.668")
     status_var = tk.StringVar(value="Idle")
 
-    # Grid helpers
-    def add_row(label_text, widget, row):
-        ttk.Label(root, text=label_text).grid(row=row, column=0, padx=8, pady=6, sticky="e")
-        widget.grid(row=row, column=1, padx=8, pady=6, sticky="we")
+    # Type A params
+    pA_1 = tk.StringVar(value="8.0")
+    pA_2 = tk.StringVar(value="16.0")
+    pA_3 = tk.StringVar(value="18.0")
 
-    # Inputs
-    e_particles = ttk.Entry(root, textvariable=particles_var)
-    e_radius = ttk.Entry(root, textvariable=radius_var)
+    # Type B params
+    pB_1 = tk.StringVar(value="14.0")
+    pB_2 = tk.StringVar(value="20.0")
+    pB_3 = tk.StringVar(value="24.0")
 
-    add_row("No. of particles", e_particles, 0)
-    add_row("Triangle Radius (r)", e_radius, 1)
+    # Layout frames
+    top_frame = ttk.LabelFrame(root, text="Triangle Type & Particle Settings")
+    top_frame.pack(fill="x", padx=10, pady=6)
+
+    params_frame = ttk.LabelFrame(root, text="Geometric Parameters")
+    params_frame.pack(fill="x", padx=10, pady=6)
+
+    # Type selector
+    ttk.Label(top_frame, text="Triangle Type:").grid(row=0, column=0, padx=6, pady=4, sticky="e")
+    type_combo = ttk.Combobox(
+        top_frame, textvariable=type_var, state="readonly",
+        values=["Equilateral", "Right-Angled", "Isosceles", "Scalene"]
+    )
+    type_combo.grid(row=0, column=1, padx=6, pady=4, sticky="w")
+
+    ttk.Label(top_frame, text="No. of particles:").grid(row=1, column=0, padx=6, pady=4, sticky="e")
+    ttk.Entry(top_frame, textvariable=particles_var, width=12).grid(row=1, column=1, padx=6, pady=4, sticky="w")
+
+    ttk.Label(top_frame, text="Fraction Type A:").grid(row=2, column=0, padx=6, pady=4, sticky="e")
+    ttk.Entry(top_frame, textvariable=fracA_var, width=12).grid(row=2, column=1, padx=6, pady=4, sticky="w")
+
+    # Dynamic parameter labels and entries
+    lbl_A1 = ttk.Label(params_frame, text="Radius A:")
+    ent_A1 = ttk.Entry(params_frame, textvariable=pA_1, width=10)
+    lbl_A2 = ttk.Label(params_frame, text="Height A:")
+    ent_A2 = ttk.Entry(params_frame, textvariable=pA_2, width=10)
+    lbl_A3 = ttk.Label(params_frame, text="Side C (A):")
+    ent_A3 = ttk.Entry(params_frame, textvariable=pA_3, width=10)
+
+    lbl_B1 = ttk.Label(params_frame, text="Radius B:")
+    ent_B1 = ttk.Entry(params_frame, textvariable=pB_1, width=10)
+    lbl_B2 = ttk.Label(params_frame, text="Height B:")
+    ent_B2 = ttk.Entry(params_frame, textvariable=pB_2, width=10)
+    lbl_B3 = ttk.Label(params_frame, text="Side C (B):")
+    ent_B3 = ttk.Entry(params_frame, textvariable=pB_3, width=10)
+
+    def update_param_fields(*args):
+        st = type_var.get().lower()
+        # Clear existing grid in params_frame
+        for widget in params_frame.winfo_children():
+            widget.grid_forget()
+
+        if "equi" in st:
+            lbl_A1.config(text="Radius A:")
+            lbl_B1.config(text="Radius B:")
+            pA_1.set("8.0")
+            pB_1.set("16.0")
+
+            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
+            ent_A1.grid(row=0, column=1, padx=4, pady=3)
+            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
+            ent_B1.grid(row=0, column=3, padx=4, pady=3)
+
+        elif "right" in st:
+            lbl_A1.config(text="Base A:")
+            lbl_A2.config(text="Height A:")
+            lbl_B1.config(text="Base B:")
+            lbl_B2.config(text="Height B:")
+            pA_1.set("12.0"); pA_2.set("16.0")
+            pB_1.set("18.0"); pB_2.set("24.0")
+
+            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
+            ent_A1.grid(row=0, column=1, padx=4, pady=3)
+            lbl_A2.grid(row=1, column=0, padx=4, pady=3, sticky="e")
+            ent_A2.grid(row=1, column=1, padx=4, pady=3)
+
+            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
+            ent_B1.grid(row=0, column=3, padx=4, pady=3)
+            lbl_B2.grid(row=1, column=2, padx=4, pady=3, sticky="e")
+            ent_B2.grid(row=1, column=3, padx=4, pady=3)
+
+        elif "iso" in st:
+            lbl_A1.config(text="Base A:")
+            lbl_A2.config(text="Height A:")
+            lbl_B1.config(text="Base B:")
+            lbl_B2.config(text="Height B:")
+            pA_1.set("14.0"); pA_2.set("18.0")
+            pB_1.set("20.0"); pB_2.set("26.0")
+
+            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
+            ent_A1.grid(row=0, column=1, padx=4, pady=3)
+            lbl_A2.grid(row=1, column=0, padx=4, pady=3, sticky="e")
+            ent_A2.grid(row=1, column=1, padx=4, pady=3)
+
+            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
+            ent_B1.grid(row=0, column=3, padx=4, pady=3)
+            lbl_B2.grid(row=1, column=2, padx=4, pady=3, sticky="e")
+            ent_B2.grid(row=1, column=3, padx=4, pady=3)
+
+        elif "scale" in st:
+            lbl_A1.config(text="Side a (A):")
+            lbl_A2.config(text="Side b (A):")
+            lbl_A3.config(text="Side c (A):")
+            lbl_B1.config(text="Side a (B):")
+            lbl_B2.config(text="Side b (B):")
+            lbl_B3.config(text="Side c (B):")
+            pA_1.set("13.0"); pA_2.set("14.0"); pA_3.set("15.0")
+            pB_1.set("18.0"); pB_2.set("20.0"); pB_3.set("22.0")
+
+            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
+            ent_A1.grid(row=0, column=1, padx=4, pady=3)
+            lbl_A2.grid(row=1, column=0, padx=4, pady=3, sticky="e")
+            ent_A2.grid(row=1, column=1, padx=4, pady=3)
+            lbl_A3.grid(row=2, column=0, padx=4, pady=3, sticky="e")
+            ent_A3.grid(row=2, column=1, padx=4, pady=3)
+
+            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
+            ent_B1.grid(row=0, column=3, padx=4, pady=3)
+            lbl_B2.grid(row=1, column=2, padx=4, pady=3, sticky="e")
+            ent_B2.grid(row=1, column=3, padx=4, pady=3)
+            lbl_B3.grid(row=2, column=2, padx=4, pady=3, sticky="e")
+            ent_B3.grid(row=2, column=3, padx=4, pady=3)
+
+    type_combo.bind("<<ComboboxSelected>>", update_param_fields)
+    update_param_fields()
 
     # Status
-    ttk.Label(root, text="Status").grid(row=2, column=0, padx=8, pady=6, sticky="e")
-    status_lbl = ttk.Label(root, textvariable=status_var)
-    status_lbl.grid(row=2, column=1, padx=8, pady=6, sticky="we")
+    status_frame = ttk.Frame(root)
+    status_frame.pack(fill="x", padx=10, pady=4)
+    ttk.Label(status_frame, text="Status:").pack(side="left", padx=4)
+    ttk.Label(status_frame, textvariable=status_var, font=("Arial", 9, "italic")).pack(side="left", padx=4)
 
     # Button handlers
     def enable_ui(enable=True):
         state = "normal" if enable else "disabled"
         start_btn.config(state=state)
+        type_combo.config(state="readonly" if enable else "disabled")
 
-    def on_done(msg, result):
+    def on_done(msg, res):
         status_var.set(msg)
         enable_ui(True)
         try:
-            if result:
-                summary = (
-                    f"Saved frames: {result.get('saved_frames')}\n"
-                    f"Particles: {result.get('num_particles')}\n"
-                    f"Final clusters: {result.get('num_clusters_final')}\n"
-                    f"Df (fit): {result.get('Df')}\n"
-                    f"Elapsed (s): {result.get('elapsed_s'):.2f}"
-                )
-            else:
-                summary = "No results returned."
-            messagebox.showinfo("Simulation complete", summary)
+            summary = (
+                f"Triangle Type: {res.get('triangle_type').capitalize()}\n"
+                f"Saved Frames: {res.get('saved_frames')}\n"
+                f"Particles: {res.get('num_particles')}\n"
+                f"Final Clusters: {res.get('num_clusters_final')}\n"
+                f"Df: {res.get('Df'):.4f}\n"
+                f"Elapsed: {res.get('elapsed_s'):.2f} s"
+            )
+            messagebox.showinfo("Simulation Complete", summary)
         except Exception as e:
-            messagebox.showwarning("Completed with issues", f"{msg}\n\nNote: {e}")
+            messagebox.showwarning("Completed with Notes", f"{msg}\n\nNote: {e}")
 
     def on_error(err):
         status_var.set(f"Error: {err}")
         enable_ui(True)
-        messagebox.showerror("Simulation failed", str(err))
+        messagebox.showerror("Simulation Error", str(err))
 
     def start_run():
+        st = type_var.get().lower()
         try:
-            N_total = int(particles_var.get())
-            r = float(radius_var.get())
-            if N_total <= 0:
-                raise ValueError("Number of particles must be positive")
-            if r <= 0:
-                raise ValueError("Radius must be positive")
+            N = int(particles_var.get())
+            fA = float(fracA_var.get())
+            if N <= 0: raise ValueError("Particle count must be positive")
+            if not (0.0 <= fA <= 1.0): raise ValueError("Fraction A must be in [0, 1]")
+
+            if "equi" in st:
+                pA = float(pA_1.get())
+                pB = float(pB_1.get())
+                if pA <= 0 or pB <= 0: raise ValueError("Radii must be positive")
+            elif "right" in st or "iso" in st:
+                pA = (float(pA_1.get()), float(pA_2.get()))
+                pB = (float(pB_1.get()), float(pB_2.get()))
+                if min(pA) <= 0 or min(pB) <= 0: raise ValueError("Dimensions must be positive")
+            elif "scale" in st:
+                pA = (float(pA_1.get()), float(pA_2.get()), float(pA_3.get()))
+                pB = (float(pB_1.get()), float(pB_2.get()), float(pB_3.get()))
+                # Trigger scalene validation
+                create_scalene_triangle_vertices(*pA)
+                create_scalene_triangle_vertices(*pB)
+            else:
+                raise ValueError("Invalid triangle type")
         except Exception as e:
-            messagebox.showerror("Invalid input", str(e))
+            messagebox.showerror("Input Error", str(e))
             return
 
         enable_ui(False)
@@ -733,10 +966,13 @@ def launch_ui():
         def worker():
             try:
                 res = run_simulation(
-                    N_total=N_total,
-                    radius=r,
+                    N_total=N,
+                    triangle_type=st,
+                    params_A=pA,
+                    params_B=pB,
+                    fraction_A=fA,
                     max_time=max_time,
-                    store_every_k=store_every_k,
+                    store_every_k=store_every_k
                 )
                 msg = f"Done: simulation completed ({res.get('num_clusters_final')} cluster(s))"
                 root.after(0, lambda: on_done(msg, res))
@@ -749,8 +985,8 @@ def launch_ui():
         status_var.set("Generating video...")
         def vid_worker():
             try:
-                import make_triangle_same_size_video
-                make_triangle_same_size_video.create_video()
+                import video_renderers.make_triangle_video as make_triangle_video
+                make_triangle_video.create_video()
                 status_var.set("Video generated successfully!")
                 messagebox.showinfo("Video Ready", "Video has been generated and saved to the project folder!")
             except Exception as e:
@@ -759,21 +995,35 @@ def launch_ui():
         threading.Thread(target=vid_worker, daemon=True).start()
 
     # Buttons
-    btns = ttk.Frame(root)
-    btns.grid(row=3, column=0, columnspan=2, pady=8)
-    start_btn = ttk.Button(btns, text="Start", command=start_run)
-    vid_btn = ttk.Button(btns, text="Generate Video", command=generate_video_action)
-    quit_btn = ttk.Button(btns, text="Quit", command=root.destroy)
+    btn_frame = ttk.Frame(root)
+    btn_frame.pack(fill="x", padx=10, pady=8)
+    start_btn = ttk.Button(btn_frame, text="Start Simulation", command=start_run)
     start_btn.pack(side="left", padx=4)
+    vid_btn = ttk.Button(btn_frame, text="Generate Video", command=generate_video_action)
     vid_btn.pack(side="left", padx=4)
+    quit_btn = ttk.Button(btn_frame, text="Quit", command=root.destroy)
     quit_btn.pack(side="left", padx=4)
 
-    # Layout
-    root.columnconfigure(1, weight=1)
-    root.minsize(400, 180)
-
+    root.minsize(440, 260)
     root.mainloop()
 
 if __name__ == "__main__":
-    print("Output:", save_dir, "| Plots:", save_plots)
-    launch_ui()
+    parser = argparse.ArgumentParser(description="Generalized Triangle DLCA Simulation")
+    parser.add_argument("--type", type=str, default="equilateral",
+                        choices=["equilateral", "right", "right-angled", "isosceles", "scalene"],
+                        help="Pre-selected triangle type for the GUI")
+    args, _ = parser.parse_known_args()
+
+    # Normalize type argument
+    t_map = {
+        "equilateral": "equilateral",
+        "right": "right-angled",
+        "right-angled": "right-angled",
+        "isosceles": "isosceles",
+        "scalene": "scalene"
+    }
+    sel_type = t_map.get(args.type.lower(), "equilateral")
+
+    print("Output Data Dir:", save_dir)
+    print("Output Plots Dir:", save_plots)
+    launch_ui(initial_type=sel_type)

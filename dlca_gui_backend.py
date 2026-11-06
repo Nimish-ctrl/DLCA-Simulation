@@ -31,19 +31,19 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 plt.rcParams['animation.ffmpeg_path'] = FFMPEG_PATH
 
 # Import existing shape simulation engines (without modifying them)
-import circle_cluster
-import triangle_cluster
-import square_cluster
-import rectangle_cluster
-import ellipse_cluster
-import superellipse_cluster
-import square_circle_cluster
-import triangle_circle_cluster
-import ellipse_circle_cluster
-import rectangle_circle_cluster
-import triangle_same_size_cluster
+import engines.circle_cluster as circle_cluster
+import engines.triangle_cluster as triangle_cluster
+import engines.square_cluster as square_cluster
+import engines.rectangle_cluster as rectangle_cluster
+import engines.ellipse_cluster as ellipse_cluster
+import engines.superellipse_cluster as superellipse_cluster
+import engines.square_circle_cluster as square_circle_cluster
+import engines.triangle_circle_cluster as triangle_circle_cluster
+import engines.ellipse_circle_cluster as ellipse_circle_cluster
+import engines.rectangle_circle_cluster as rectangle_circle_cluster
+import engines.triangle_same_size_cluster as triangle_same_size_cluster
 
-from collisions import (
+from collisions.collisions import (
     create_equilateral_triangle_vertices,
     create_right_triangle_vertices,
     create_isosceles_triangle_vertices,

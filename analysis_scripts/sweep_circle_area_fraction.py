@@ -17,7 +17,7 @@ from datetime import datetime
 import multiprocessing as mp
 import numpy as np
 
-import circle_cluster
+import engines.circle_cluster as circle_cluster
 
 # ==============================================================================
 # Default Sweep Configuration

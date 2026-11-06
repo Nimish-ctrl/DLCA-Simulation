@@ -24,7 +24,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from collisions import (
+from collisions.collisions import (
     create_equilateral_triangle_vertices,
     get_triangle_bounding_radius,
     get_triangle_area,

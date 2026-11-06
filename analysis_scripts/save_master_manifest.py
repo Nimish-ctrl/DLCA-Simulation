@@ -1,5 +1,5 @@
 import os, json, csv
-import sweep_circle_area_fraction
+import analysis_scripts.sweep_circle_area_fraction as sweep_circle_area_fraction
 
 base_json = r"sweeps/sweep_circles_20261010_230233/manifest.json"
 with open(base_json) as f:

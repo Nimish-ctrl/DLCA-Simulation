@@ -11,8 +11,8 @@ import json
 import csv
 import numpy as np
 
-import circle_cluster
-import sweep_circle_area_fraction
+import engines.circle_cluster as circle_cluster
+import analysis_scripts.sweep_circle_area_fraction as sweep_circle_area_fraction
 
 BASE_SWEEP_DIR = r"sweeps/sweep_circles_20261010_230233"
 EXTENDED_COUNTS = [7000, 9000, 11000]

@@ -9,7 +9,7 @@ import time
 import json
 import os
 from collections import defaultdict
-from collisions_rect_circle import (
+from collisions.collisions_rect_circle import (
     dist, get_corners, project_polygon, get_mtv_any_any, 
     quick_center_aabb_reject
 )

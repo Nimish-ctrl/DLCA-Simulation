@@ -1,5 +1,5 @@
-import make_triangle_same_size_video
-import make_triangle_video
+import video_renderers.make_triangle_same_size_video as make_triangle_same_size_video
+import video_renderers.make_triangle_video as make_triangle_video
 import glob, os
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sim_npy_out_triangle")

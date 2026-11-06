@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 from matplotlib.patches import Circle, Polygon
 
-from collisions import (
+from collisions.collisions import (
     create_equilateral_triangle_vertices,
     get_triangle_corners
 )

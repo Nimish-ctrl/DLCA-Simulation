@@ -9,7 +9,7 @@ import time
 import json
 import os
 from collections import defaultdict
-from collisions2 import dist, get_corners, project_polygon, get_mtv_square_square, quick_center_aabb_reject
+from collisions.collisions2 import dist, get_corners, project_polygon, get_mtv_square_square, quick_center_aabb_reject
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches

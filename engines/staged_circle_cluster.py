@@ -16,7 +16,7 @@ import random
 import multiprocessing as mp
 import numpy as np
 
-import circle_cluster
+import engines.circle_cluster as circle_cluster
 
 def _worker_stage1(batch_idx, n_total, radii_pair, fraction_a, max_time, store_every_k, batch_save_dir, seed):
     """Worker function executed in a separate OS process for Stage 1."""

@@ -1,8 +1,11 @@
 """
-triangle_cluster.py — Generalized Triangle DLCA Simulation
-Supports 4 triangle types: Equilateral, Right-Angled, Isosceles, and Scalene.
-Uses stored local vertices, SAT/MTV collision physics, area-based mass proxy,
-unbiased Brownian rotation, and spatial-grid acceleration.
+superellipse_cluster.py — Superellipse DLCA Simulation
+Supports monodisperse or bidisperse superellipses defined by |x/a|^n + |y/b|^n = 1.
+Approximated as many-sided convex polygons (n >= 1.0) flowing through the generic
+polygon SAT/MTV collision engine.
+
+Uses stored local vertices, generic polygon SAT/MTV collision physics, area-based
+mass proxy, unbiased Brownian rotation, and spatial-grid acceleration.
 """
 
 import sys
@@ -17,16 +20,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from collisions import (
-    create_equilateral_triangle_vertices,
-    create_right_triangle_vertices,
-    create_isosceles_triangle_vertices,
-    create_scalene_triangle_vertices,
-    get_triangle_bounding_radius,
-    get_triangle_area,
-    get_triangle_self_inertia_ratio,
-    get_triangle_corners,
-    get_mtv_triangle_triangle
+from collisions.collisions import (
+    create_superellipse_vertices,
+    get_polygon_bounding_radius,
+    get_polygon_area,
+    get_polygon_self_inertia_ratio,
+    get_polygon_corners,
+    get_mtv_polygon_polygon
 )
 
 # ---------------------------
@@ -48,11 +48,16 @@ min_Rg = 1e-8
 min_pts_for_fit = 6
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-save_dir = os.path.join(SCRIPT_DIR, "sim_npy_out_triangle")
-save_plots = os.path.join(SCRIPT_DIR, "plots_triangle")
+save_dir = os.path.join(SCRIPT_DIR, "sim_npy_out_superellipse")
+save_plots = os.path.join(SCRIPT_DIR, "plots_superellipse")
 store_every_k = 1
 
-# Contact gap and safety push
+# Fixed internal constant for superellipse polygon sampling
+# A flatter, higher-exponent superellipse benefits from more sample points to
+# represent its flat sides well, while a near-circular one at low exponents needs fewer.
+DEFAULT_SAMPLE_POINTS = 24
+
+# Contact gap and safety push (pixels)
 EPS_CONTACT = 1.0
 EPS_PUSH    = 0.2
 
@@ -162,7 +167,7 @@ def check_one_cluster(particles):
     return len(set(p['cluster_id'] for p in particles)) == 1
 
 # ---------------------------
-# Rigid Contact Separation (SAT / MTV)
+# Rigid Contact Separation (Generic Polygon SAT / MTV)
 # ---------------------------
 def _move_cluster(cluster, dx, dy):
     for q in cluster:
@@ -183,14 +188,14 @@ def resolve_overlap_pair_as_clusters(p1, p2, eps=EPS_CONTACT):
     if p1['cluster_id'] == p2['cluster_id']:
         return False
 
-    # 1. Cheap Reject (Bounding circumradius check)
+    # 1. Broad-phase / Cheap Reject (Bounding circumradius check)
     dist_sq = (p1['x'] - p2['x'])**2 + (p1['y'] - p2['y'])**2
     safe_dist = (p1['r_bound'] + p2['r_bound']) + eps
     if dist_sq > safe_dist**2:
         return False
 
-    # 2. Exact Polygon SAT Check
-    res = get_mtv_triangle_triangle(p1, p2, eps=1e-9)
+    # 2. Exact Polygon SAT Check (generic convex polygon MTV)
+    res = get_mtv_polygon_polygon(p1, p2, eps=1e-9)
     if res is None:
         return False
 
@@ -428,33 +433,17 @@ def compute_rdf(particles, width, height, dr=2.0, max_r=None):
 # ---------------------------
 # Particle Creation Helper
 # ---------------------------
-def create_triangle_particle(shape_type, params, x, y, orientation, cluster_id, particle_id):
+def create_superellipse_particle(params, x, y, orientation, cluster_id, particle_id, num_samples=DEFAULT_SAMPLE_POINTS):
     """
-    Creates a triangle particle with local vertices generated based on type:
-    - 'equilateral': params is radius r
-    - 'right': params is (base, height)
-    - 'isosceles': params is (base, height)
-    - 'scalene': params is (side_a, side_b, side_c)
+    Creates a superellipse particle:
+    params: (a, b, n)
     """
-    st = shape_type.lower()
-    if st in ['equilateral', 'eq']:
-        r = float(params if isinstance(params, (int, float)) else params[0])
-        verts = create_equilateral_triangle_vertices(r)
-    elif st in ['right', 'right-angled', 'rt']:
-        b, h = float(params[0]), float(params[1])
-        verts = create_right_triangle_vertices(b, h)
-    elif st in ['isosceles', 'iso']:
-        b, h = float(params[0]), float(params[1])
-        verts = create_isosceles_triangle_vertices(b, h)
-    elif st in ['scalene', 'sc']:
-        a, b, c = float(params[0]), float(params[1]), float(params[2])
-        verts = create_scalene_triangle_vertices(a, b, c)
-    else:
-        raise ValueError(f"Unknown triangle type: {shape_type}")
+    a, b, n = float(params[0]), float(params[1]), float(params[2])
+    verts = create_superellipse_vertices(a, b, n, num_samples=num_samples)
 
-    r_bound = get_triangle_bounding_radius(verts)
-    area = get_triangle_area(verts)
-    self_inertia = get_triangle_self_inertia_ratio(verts)
+    r_bound = get_polygon_bounding_radius(verts)
+    area = get_polygon_area(verts)
+    self_inertia = get_polygon_self_inertia_ratio(verts)
 
     return {
         'x': float(x),
@@ -465,8 +454,11 @@ def create_triangle_particle(shape_type, params, x, y, orientation, cluster_id, 
         'r': float(r_bound),  # backwards compatibility
         'area': float(area),
         'self_inertia_ratio': float(self_inertia),
-        'shape': 'triangle',
-        'triangle_type': st,
+        'shape': 'superellipse',
+        'a': a,
+        'b': b,
+        'n': n,
+        'num_samples': int(num_samples),
         'cluster_id': int(cluster_id),
         'cluster_members': [],
         'angle': random.uniform(0, 2 * math.pi),
@@ -476,8 +468,9 @@ def create_triangle_particle(shape_type, params, x, y, orientation, cluster_id, 
 # ---------------------------
 # Simulation Runner
 # ---------------------------
-def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1.0,
-                   max_time=10000, store_every_k=1, save_dir=save_dir, seed=None):
+def run_simulation(N_total, params_A, params_B=None, fraction_A=1.0,
+                   max_time=10000, store_every_k=1, save_dir=save_dir,
+                   num_samples=DEFAULT_SAMPLE_POINTS, seed=None):
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
@@ -493,8 +486,8 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
     count_B = N_total - count_A
 
     # Sample particle to compute max cell size
-    dummy_A = create_triangle_particle(triangle_type, params_A, 0, 0, 0, 0, 0)
-    dummy_B = create_triangle_particle(triangle_type, params_B, 0, 0, 0, 0, 1)
+    dummy_A = create_superellipse_particle(params_A, 0, 0, 0, 0, 0, num_samples=num_samples)
+    dummy_B = create_superellipse_particle(params_B, 0, 0, 0, 0, 1, num_samples=num_samples)
     max_rbound = max(dummy_A['r_bound'], dummy_B['r_bound'])
 
     cell_size = max(20.0, max_rbound * 2.2)
@@ -511,15 +504,14 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
         max_attempts = 15000
         for _ in range(count):
             attempts = 0
-            # Test particle to get r_bound
-            temp_p = create_triangle_particle(triangle_type, params, 0, 0, 0, 0, 0)
+            temp_p = create_superellipse_particle(params, 0, 0, 0, 0, 0, num_samples=num_samples)
             rb = temp_p['r_bound']
             while attempts < max_attempts:
                 x = random.uniform(spawn_x0 + rb, spawn_x0 + spawn_width - rb)
                 y = random.uniform(spawn_y0 + rb, spawn_y0 + spawn_height - rb)
                 if check_spawn_overlap(particles, x, y, rb, grid, cell_size):
                     orient = random.uniform(0, 2 * math.pi)
-                    p = create_triangle_particle(triangle_type, params, x, y, orient, cluster_id_counter, len(particles))
+                    p = create_superellipse_particle(params, x, y, orient, cluster_id_counter, len(particles), num_samples=num_samples)
                     particles.append(p)
                     insert_into_grid(particles[-1], grid, cell_size)
                     cluster_id_counter += 1
@@ -613,7 +605,7 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
 
         if check_one_cluster(particles):
             print(f"All particles merged into one cluster at time step {time_step}")
-            # Hold the final cluster for 45 frames
+            # Hold final cluster for 45 frames
             for _ in range(45):
                 if t_save_idx < num_saved_frames:
                     for idx, p in enumerate(particles):
@@ -654,7 +646,7 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
     else:
         Rg_largest = 0.0; M_largest = 0.0; Rg_largest_n = 0.0
 
-    tag = f"{triangle_type}_N{len(particles)}_t{max_time}"
+    tag = f"superellipse_N{len(particles)}_nA{params_A[2]}_t{max_time}"
     traj_path = os.path.join(save_dir, f"traj_{tag}.npy")
     orient_path = os.path.join(save_dir, f"orient_{tag}.npy")
     verts_path = os.path.join(save_dir, f"vertices_{tag}.npy")
@@ -667,12 +659,13 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
     np.save(radii_path, np.array([p['r_bound'] for p in particles], dtype=np.float32))
 
     meta = {
-        "triangle_type": triangle_type,
-        "params_A": params_A if isinstance(params_A, (list, tuple)) else [params_A],
-        "params_B": params_B if isinstance(params_B, (list, tuple)) else [params_B],
+        "shape": "superellipse",
+        "params_A": list(params_A),
+        "params_B": list(params_B),
         "fraction_A": fraction_A,
         "count_A": count_A,
         "count_B": count_B,
+        "num_samples": num_samples,
         "N_total": len(particles),
         "width": width,
         "height": height,
@@ -687,23 +680,23 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
 
     enforce_world_bounds_all(particles, width, height)
     
-    # Static plot
+    # Static end-of-run plot (flush polygon visualization)
     plt.figure(figsize=(12, 8))
     ax = plt.gca()
     for p in particles:
-        corners = get_triangle_corners(p)
-        color = 'cyan' if p['id'] < count_A else 'coral'
+        corners = get_polygon_corners(p)
+        color = 'teal' if p['id'] < count_A else 'coral'
         poly = patches.Polygon(corners, closed=True, facecolor=color, alpha=0.85)
         ax.add_patch(poly)
         outline = patches.Polygon(corners, closed=True, edgecolor='black', facecolor='none', linewidth=0.6)
         ax.add_patch(outline)
     plt.xlim(0, width); plt.ylim(0, height); plt.gca().set_aspect('equal', adjustable='box')
-    plt.title(f"Final: {triangle_type.capitalize()} Triangles | {len(set(p['cluster_id'] for p in particles))} clusters | N={len(particles)}")
+    plt.title(f"Final: Superellipse Particles | {len(set(p['cluster_id'] for p in particles))} clusters | N={len(particles)}")
     plt.savefig(os.path.join(save_plots, f"final_{tag}.png"), dpi=180, bbox_inches='tight')
     plt.close()
 
     result = {
-        "triangle_type": triangle_type,
+        "shape": "superellipse",
         "Df": float(Df),
         "intercept": float(intercept) if 'intercept' in locals() else None,
         "r2": float(r2) if 'r2' in locals() else None,
@@ -731,8 +724,7 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
     plt.plot(r_vals, g_r, label=f'RDF (t={max_time})')
     plt.axhline(1.0, color='gray', linestyle='--', alpha=0.5, label='Random distribution')
     plt.xlabel("Distance r (pixels)")
-    plt.ylabel("g(r)")
-    plt.title(f"Radial Distribution Function\n{triangle_type.capitalize()} Triangles | N={len(particles)}")
+    plt.title(f"Radial Distribution Function\\nSuperellipse Particles | N={len(particles)}")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -741,21 +733,6 @@ def run_simulation(N_total, triangle_type, params_A, params_B=None, fraction_A=1
 
     return result
 
-# Backward compatible function name
-def run_simulation_for_composition(N_total, radii_pair, fraction_A, max_time=10000,
-                                   store_every_k=1, save_dir=save_dir, seed=None):
-    return run_simulation(
-        N_total=N_total,
-        triangle_type='equilateral',
-        params_A=radii_pair[0],
-        params_B=radii_pair[1],
-        fraction_A=fraction_A,
-        max_time=max_time,
-        store_every_k=store_every_k,
-        save_dir=save_dir,
-        seed=seed
-    )
-
 # ---------------------------
 # Interactive Tkinter GUI
 # ---------------------------
@@ -763,169 +740,66 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-def launch_ui(initial_type="equilateral"):
+def launch_ui():
     root = tk.Tk()
-    root.title("Generalized Triangle DLCA Runner")
+    root.title("Superellipse DLCA Simulation Runner")
 
     # Variables
-    type_var = tk.StringVar(value=initial_type.capitalize())
     particles_var = tk.StringVar(value="350")
-    fracA_var = tk.StringVar(value="0.668")
+    fracA_var = tk.StringVar(value="1.0")
     status_var = tk.StringVar(value="Idle")
 
-    # Type A params
-    pA_1 = tk.StringVar(value="8.0")
-    pA_2 = tk.StringVar(value="16.0")
-    pA_3 = tk.StringVar(value="18.0")
+    # Class A parameters: a, b, n
+    pA_a = tk.StringVar(value="14.0")
+    pA_b = tk.StringVar(value="8.0")
+    pA_n = tk.StringVar(value="2.0")
 
-    # Type B params
-    pB_1 = tk.StringVar(value="14.0")
-    pB_2 = tk.StringVar(value="20.0")
-    pB_3 = tk.StringVar(value="24.0")
+    # Class B parameters: a, b, n
+    pB_a = tk.StringVar(value="18.0")
+    pB_b = tk.StringVar(value="12.0")
+    pB_n = tk.StringVar(value="4.0")
 
     # Layout frames
-    top_frame = ttk.LabelFrame(root, text="Triangle Type & Particle Settings")
+    top_frame = ttk.LabelFrame(root, text="Simulation Settings")
     top_frame.pack(fill="x", padx=10, pady=6)
 
-    params_frame = ttk.LabelFrame(root, text="Geometric Parameters")
+    params_frame = ttk.LabelFrame(root, text="Superellipse Parameters (|x/a|^n + |y/b|^n = 1, n >= 1)")
     params_frame.pack(fill="x", padx=10, pady=6)
 
-    # Type selector
-    ttk.Label(top_frame, text="Triangle Type:").grid(row=0, column=0, padx=6, pady=4, sticky="e")
-    type_combo = ttk.Combobox(
-        top_frame, textvariable=type_var, state="readonly",
-        values=["Equilateral", "Right-Angled", "Isosceles", "Scalene"]
-    )
-    type_combo.grid(row=0, column=1, padx=6, pady=4, sticky="w")
+    ttk.Label(top_frame, text="No. of particles:").grid(row=0, column=0, padx=6, pady=4, sticky="e")
+    ttk.Entry(top_frame, textvariable=particles_var, width=12).grid(row=0, column=1, padx=6, pady=4, sticky="w")
 
-    ttk.Label(top_frame, text="No. of particles:").grid(row=1, column=0, padx=6, pady=4, sticky="e")
-    ttk.Entry(top_frame, textvariable=particles_var, width=12).grid(row=1, column=1, padx=6, pady=4, sticky="w")
+    ttk.Label(top_frame, text="Fraction Class A:").grid(row=1, column=0, padx=6, pady=4, sticky="e")
+    ttk.Entry(top_frame, textvariable=fracA_var, width=12).grid(row=1, column=1, padx=6, pady=4, sticky="w")
 
-    ttk.Label(top_frame, text="Fraction Type A:").grid(row=2, column=0, padx=6, pady=4, sticky="e")
-    ttk.Entry(top_frame, textvariable=fracA_var, width=12).grid(row=2, column=1, padx=6, pady=4, sticky="w")
+    # Parameters grid
+    ttk.Label(params_frame, text="Class A — a:").grid(row=0, column=0, padx=4, pady=3, sticky="e")
+    ttk.Entry(params_frame, textvariable=pA_a, width=8).grid(row=0, column=1, padx=4, pady=3)
+    ttk.Label(params_frame, text="b:").grid(row=0, column=2, padx=4, pady=3, sticky="e")
+    ttk.Entry(params_frame, textvariable=pA_b, width=8).grid(row=0, column=3, padx=4, pady=3)
+    ttk.Label(params_frame, text="n (>=1.0):").grid(row=0, column=4, padx=4, pady=3, sticky="e")
+    ttk.Entry(params_frame, textvariable=pA_n, width=8).grid(row=0, column=5, padx=4, pady=3)
 
-    # Dynamic parameter labels and entries
-    lbl_A1 = ttk.Label(params_frame, text="Radius A:")
-    ent_A1 = ttk.Entry(params_frame, textvariable=pA_1, width=10)
-    lbl_A2 = ttk.Label(params_frame, text="Height A:")
-    ent_A2 = ttk.Entry(params_frame, textvariable=pA_2, width=10)
-    lbl_A3 = ttk.Label(params_frame, text="Side C (A):")
-    ent_A3 = ttk.Entry(params_frame, textvariable=pA_3, width=10)
+    ttk.Label(params_frame, text="Class B — a:").grid(row=1, column=0, padx=4, pady=3, sticky="e")
+    ttk.Entry(params_frame, textvariable=pB_a, width=8).grid(row=1, column=1, padx=4, pady=3)
+    ttk.Label(params_frame, text="b:").grid(row=1, column=2, padx=4, pady=3, sticky="e")
+    ttk.Entry(params_frame, textvariable=pB_b, width=8).grid(row=1, column=3, padx=4, pady=3)
+    ttk.Label(params_frame, text="n (>=1.0):").grid(row=1, column=4, padx=4, pady=3, sticky="e")
+    ttk.Entry(params_frame, textvariable=pB_n, width=8).grid(row=1, column=5, padx=4, pady=3)
 
-    lbl_B1 = ttk.Label(params_frame, text="Radius B:")
-    ent_B1 = ttk.Entry(params_frame, textvariable=pB_1, width=10)
-    lbl_B2 = ttk.Label(params_frame, text="Height B:")
-    ent_B2 = ttk.Entry(params_frame, textvariable=pB_2, width=10)
-    lbl_B3 = ttk.Label(params_frame, text="Side C (B):")
-    ent_B3 = ttk.Entry(params_frame, textvariable=pB_3, width=10)
+    # Status label
+    status_lbl = ttk.Label(root, textvariable=status_var, font=("Segoe UI", 9, "italic"))
+    status_lbl.pack(pady=4)
 
-    def update_param_fields(*args):
-        st = type_var.get().lower()
-        # Clear existing grid in params_frame
-        for widget in params_frame.winfo_children():
-            widget.grid_forget()
-
-        if "equi" in st:
-            lbl_A1.config(text="Radius A:")
-            lbl_B1.config(text="Radius B:")
-            pA_1.set("8.0")
-            pB_1.set("16.0")
-
-            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
-            ent_A1.grid(row=0, column=1, padx=4, pady=3)
-            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
-            ent_B1.grid(row=0, column=3, padx=4, pady=3)
-
-        elif "right" in st:
-            lbl_A1.config(text="Base A:")
-            lbl_A2.config(text="Height A:")
-            lbl_B1.config(text="Base B:")
-            lbl_B2.config(text="Height B:")
-            pA_1.set("12.0"); pA_2.set("16.0")
-            pB_1.set("18.0"); pB_2.set("24.0")
-
-            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
-            ent_A1.grid(row=0, column=1, padx=4, pady=3)
-            lbl_A2.grid(row=1, column=0, padx=4, pady=3, sticky="e")
-            ent_A2.grid(row=1, column=1, padx=4, pady=3)
-
-            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
-            ent_B1.grid(row=0, column=3, padx=4, pady=3)
-            lbl_B2.grid(row=1, column=2, padx=4, pady=3, sticky="e")
-            ent_B2.grid(row=1, column=3, padx=4, pady=3)
-
-        elif "iso" in st:
-            lbl_A1.config(text="Base A:")
-            lbl_A2.config(text="Height A:")
-            lbl_B1.config(text="Base B:")
-            lbl_B2.config(text="Height B:")
-            pA_1.set("14.0"); pA_2.set("18.0")
-            pB_1.set("20.0"); pB_2.set("26.0")
-
-            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
-            ent_A1.grid(row=0, column=1, padx=4, pady=3)
-            lbl_A2.grid(row=1, column=0, padx=4, pady=3, sticky="e")
-            ent_A2.grid(row=1, column=1, padx=4, pady=3)
-
-            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
-            ent_B1.grid(row=0, column=3, padx=4, pady=3)
-            lbl_B2.grid(row=1, column=2, padx=4, pady=3, sticky="e")
-            ent_B2.grid(row=1, column=3, padx=4, pady=3)
-
-        elif "scale" in st:
-            lbl_A1.config(text="Side a (A):")
-            lbl_A2.config(text="Side b (A):")
-            lbl_A3.config(text="Side c (A):")
-            lbl_B1.config(text="Side a (B):")
-            lbl_B2.config(text="Side b (B):")
-            lbl_B3.config(text="Side c (B):")
-            pA_1.set("13.0"); pA_2.set("14.0"); pA_3.set("15.0")
-            pB_1.set("18.0"); pB_2.set("20.0"); pB_3.set("22.0")
-
-            lbl_A1.grid(row=0, column=0, padx=4, pady=3, sticky="e")
-            ent_A1.grid(row=0, column=1, padx=4, pady=3)
-            lbl_A2.grid(row=1, column=0, padx=4, pady=3, sticky="e")
-            ent_A2.grid(row=1, column=1, padx=4, pady=3)
-            lbl_A3.grid(row=2, column=0, padx=4, pady=3, sticky="e")
-            ent_A3.grid(row=2, column=1, padx=4, pady=3)
-
-            lbl_B1.grid(row=0, column=2, padx=4, pady=3, sticky="e")
-            ent_B1.grid(row=0, column=3, padx=4, pady=3)
-            lbl_B2.grid(row=1, column=2, padx=4, pady=3, sticky="e")
-            ent_B2.grid(row=1, column=3, padx=4, pady=3)
-            lbl_B3.grid(row=2, column=2, padx=4, pady=3, sticky="e")
-            ent_B3.grid(row=2, column=3, padx=4, pady=3)
-
-    type_combo.bind("<<ComboboxSelected>>", update_param_fields)
-    update_param_fields()
-
-    # Status
-    status_frame = ttk.Frame(root)
-    status_frame.pack(fill="x", padx=10, pady=4)
-    ttk.Label(status_frame, text="Status:").pack(side="left", padx=4)
-    ttk.Label(status_frame, textvariable=status_var, font=("Arial", 9, "italic")).pack(side="left", padx=4)
-
-    # Button handlers
-    def enable_ui(enable=True):
-        state = "normal" if enable else "disabled"
+    def enable_ui(enabled=True):
+        state = "normal" if enabled else "disabled"
         start_btn.config(state=state)
-        type_combo.config(state="readonly" if enable else "disabled")
+        vid_btn.config(state=state)
 
     def on_done(msg, res):
         status_var.set(msg)
         enable_ui(True)
-        try:
-            summary = (
-                f"Triangle Type: {res.get('triangle_type').capitalize()}\n"
-                f"Saved Frames: {res.get('saved_frames')}\n"
-                f"Particles: {res.get('num_particles')}\n"
-                f"Final Clusters: {res.get('num_clusters_final')}\n"
-                f"Df: {res.get('Df'):.4f}\n"
-                f"Elapsed: {res.get('elapsed_s'):.2f} s"
-            )
-            messagebox.showinfo("Simulation Complete", summary)
-        except Exception as e:
-            messagebox.showwarning("Completed with Notes", f"{msg}\n\nNote: {e}")
+        messagebox.showinfo("Simulation Finished", f"Simulation completed successfully!\n\nDf: {res.get('Df', 'N/A')}\nFinal Clusters: {res.get('num_clusters_final')}")
 
     def on_error(err):
         status_var.set(f"Error: {err}")
@@ -933,41 +807,34 @@ def launch_ui(initial_type="equilateral"):
         messagebox.showerror("Simulation Error", str(err))
 
     def start_run():
-        st = type_var.get().lower()
         try:
             N = int(particles_var.get())
+            if N <= 1: raise ValueError("Particle count must be > 1")
             fA = float(fracA_var.get())
-            if N <= 0: raise ValueError("Particle count must be positive")
-            if not (0.0 <= fA <= 1.0): raise ValueError("Fraction A must be in [0, 1]")
+            if not (0.0 <= fA <= 1.0): raise ValueError("Fraction Class A must be between 0.0 and 1.0")
 
-            if "equi" in st:
-                pA = float(pA_1.get())
-                pB = float(pB_1.get())
-                if pA <= 0 or pB <= 0: raise ValueError("Radii must be positive")
-            elif "right" in st or "iso" in st:
-                pA = (float(pA_1.get()), float(pA_2.get()))
-                pB = (float(pB_1.get()), float(pB_2.get()))
-                if min(pA) <= 0 or min(pB) <= 0: raise ValueError("Dimensions must be positive")
-            elif "scale" in st:
-                pA = (float(pA_1.get()), float(pA_2.get()), float(pA_3.get()))
-                pB = (float(pB_1.get()), float(pB_2.get()), float(pB_3.get()))
-                # Trigger scalene validation
-                create_scalene_triangle_vertices(*pA)
-                create_scalene_triangle_vertices(*pB)
-            else:
-                raise ValueError("Invalid triangle type")
+            a_A, b_A, n_A = float(pA_a.get()), float(pA_b.get()), float(pA_n.get())
+            a_B, b_B, n_B = float(pB_a.get()), float(pB_b.get()), float(pB_n.get())
+
+            # Explicit validation
+            create_superellipse_vertices(a_A, b_A, n_A)
+            if fA < 1.0:
+                create_superellipse_vertices(a_B, b_B, n_B)
+
+            pA = (a_A, b_A, n_A)
+            pB = (a_B, b_B, n_B)
+
         except Exception as e:
             messagebox.showerror("Input Error", str(e))
             return
 
         enable_ui(False)
-        status_var.set("Running simulation...")
+        status_var.set("Running superellipse simulation...")
 
         def worker():
             try:
                 res = run_simulation(
                     N_total=N,
-                    triangle_type=st,
                     params_A=pA,
                     params_B=pB,
                     fraction_A=fA,
@@ -985,8 +852,8 @@ def launch_ui(initial_type="equilateral"):
         status_var.set("Generating video...")
         def vid_worker():
             try:
-                import make_triangle_video
-                make_triangle_video.create_video()
+                import video_renderers.make_superellipse_video as make_superellipse_video
+                make_superellipse_video.create_video()
                 status_var.set("Video generated successfully!")
                 messagebox.showinfo("Video Ready", "Video has been generated and saved to the project folder!")
             except Exception as e:
@@ -1004,26 +871,33 @@ def launch_ui(initial_type="equilateral"):
     quit_btn = ttk.Button(btn_frame, text="Quit", command=root.destroy)
     quit_btn.pack(side="left", padx=4)
 
-    root.minsize(440, 260)
+    root.minsize(440, 220)
     root.mainloop()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generalized Triangle DLCA Simulation")
-    parser.add_argument("--type", type=str, default="equilateral",
-                        choices=["equilateral", "right", "right-angled", "isosceles", "scalene"],
-                        help="Pre-selected triangle type for the GUI")
+    parser = argparse.ArgumentParser(description="Superellipse DLCA Simulation")
+    parser.add_argument("--headless", action="store_true", help="Run without GUI")
+    parser.add_argument("--N", type=int, default=350, help="Total particles")
+    parser.add_argument("--a_A", type=float, default=14.0, help="Semi-axis a for Class A")
+    parser.add_argument("--b_A", type=float, default=8.0, help="Semi-axis b for Class A")
+    parser.add_argument("--n_A", type=float, default=2.0, help="Exponent n for Class A")
+    parser.add_argument("--a_B", type=float, default=18.0, help="Semi-axis a for Class B")
+    parser.add_argument("--b_B", type=float, default=12.0, help="Semi-axis b for Class B")
+    parser.add_argument("--n_B", type=float, default=4.0, help="Exponent n for Class B")
+    parser.add_argument("--fraction_A", type=float, default=1.0, help="Fraction of Class A particles")
+    parser.add_argument("--max_time", type=int, default=10000, help="Maximum simulation time steps")
+    parser.add_argument("--num_samples", type=int, default=DEFAULT_SAMPLE_POINTS, help="Sample points per polygon")
     args, _ = parser.parse_known_args()
 
-    # Normalize type argument
-    t_map = {
-        "equilateral": "equilateral",
-        "right": "right-angled",
-        "right-angled": "right-angled",
-        "isosceles": "isosceles",
-        "scalene": "scalene"
-    }
-    sel_type = t_map.get(args.type.lower(), "equilateral")
-
-    print("Output Data Dir:", save_dir)
-    print("Output Plots Dir:", save_plots)
-    launch_ui(initial_type=sel_type)
+    if args.headless:
+        print("Running in headless mode...")
+        run_simulation(
+            N_total=args.N,
+            params_A=(args.a_A, args.b_A, args.n_A),
+            params_B=(args.a_B, args.b_B, args.n_B),
+            fraction_A=args.fraction_A,
+            max_time=args.max_time,
+            num_samples=args.num_samples
+        )
+    else:
+        launch_ui()

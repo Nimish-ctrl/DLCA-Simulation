@@ -4,14 +4,70 @@ A unified scientific laboratory and graphical suite for simulating **Diffusion-L
 
 ---
 
-## 🌟 Features
+## 📁 Repository Structure
 
-- **Multi-Geometry Physics Engine**:
-  - **Single Species**: Circles, Equilateral / Right / Isosceles / Scalene Triangles, Squares, Rectangles, Ellipses, Superellipses.
-  - **Binary Mixtures**: Circle-Square, Circle-Triangle, Circle-Ellipse, Circle-Rectangle.
-  - **Dispersions**: Monodisperse and Bidistributed sizes with customizable mixing fractions.
+The project is cleanly divided into specialized directories for easy navigation:
+
+```text
+dlca_final_project/
+├── app.py                     # Streamlit GUI frontend (Interactive Dashboard)
+├── dlca_gui_backend.py        # Unified backend controller & plotting engine
+├── run_gui.bat                # One-click Windows desktop launcher
+├── requirements.txt           # Python package dependencies
+├── .gitignore                 # Standard Git ignore file
+├── README.md                  # Comprehensive documentation
+│
+├── engines/                   # Core Brownian aggregation simulation modules
+│   ├── circle_cluster.py              # Circle aggregation engine
+│   ├── triangle_cluster.py            # Triangle aggregation engine (Equilateral, Right, Isosceles, Scalene)
+│   ├── triangle_same_size_cluster.py  # Equal-sized triangle aggregation
+│   ├── square_cluster.py              # Square aggregation engine
+│   ├── rectangle_cluster.py           # Rectangle aggregation engine
+│   ├── ellipse_cluster.py             # Ellipse aggregation engine
+│   ├── superellipse_cluster.py        # Superellipse aggregation engine
+│   ├── square_circle_cluster.py       # Binary mixture: Square-Circle aggregation
+│   ├── triangle_circle_cluster.py     # Binary mixture: Triangle-Circle aggregation
+│   ├── ellipse_circle_cluster.py      # Binary mixture: Ellipse-Circle aggregation
+│   ├── rectangle_circle_cluster.py    # Binary mixture: Rectangle-Circle aggregation
+│   └── staged_circle_cluster.py       # Staged circle aggregation engine
+│
+├── collisions/                # 2D geometry collision detection & Separating Axis Theorem (SAT)
+│   ├── collisions.py                  # Primary SAT polygon & circle collision algorithms
+│   ├── collisions2.py                 # Specialized collision routines for rectangular systems
+│   ├── collisionsellipse.py           # Elliptical collision utilities
+│   └── collisions_rect_circle.py      # Rectangle-Circle contact & penetration detection
+│
+├── video_renderers/           # Dedicated true-geometry MP4 video generators
+│   ├── make_circle_video.py
+│   ├── make_triangle_video.py
+│   ├── make_triangle_same_size_video.py
+│   ├── make_triangle_circle_video.py
+│   ├── make_square_video.py
+│   ├── make_square_circle_video.py
+│   ├── make_rectangle_video.py
+│   ├── make_rectangle_circle_video.py
+│   ├── make_ellipse_circle_video.py
+│   └── make_superellipse_video.py
+│
+└── analysis_scripts/          # Batch runners, parameter sweeps & standalone plotting scripts
+    ├── generate_analysis_plots.py     # Statistical plot generator
+    ├── main.py                        # CLI test runner
+    ├── render_circle_final_pngs.py    # Batch snapshot renderer
+    ├── run_pipeline_overnight.py      # Long-run parameter pipeline
+    ├── run_remaining.py               # Auxiliary batch processor
+    ├── save_master_manifest.py        # Manifest database builder
+    ├── sweep_circle_area_fraction.py  # Area fraction (phi) parameter sweep for circles
+    ├── sweep_triangle_area_fraction.py# Area fraction parameter sweep for triangles
+    └── verify_staged_circle.py        # Verification harness
+```
+
+---
+
+## 🌟 Key Capabilities
+
+- **12 Particle Geometries & Binary Mixtures**: Monodisperse and bidistributed circles, triangles, squares, rectangles, ellipses, and superellipses.
 - **Interactive Web GUI (Streamlit)**:
-  - Real-time aggregation monitoring (live particle count, cluster count, SPS speed, dynamic ETA).
+  - Real-time aggregation monitoring (live particle count, active cluster count, steps/second, dynamic ETA).
   - Live Altair kinetic decay curves tracking cluster dissolution over time.
   - Interactive **⏹ Stop Simulation** button allowing instant halting with full intermediate data and plot recovery.
   - On-demand or automatic true-geometry MP4 animation rendering via `imageio-ffmpeg`.
@@ -22,66 +78,35 @@ A unified scientific laboratory and graphical suite for simulating **Diffusion-L
 
 ---
 
-## 📁 Repository Structure
-
-```text
-dlca_final_project/
-├── app.py                            # Streamlit GUI frontend
-├── dlca_gui_backend.py               # Unified backend engine & simulation coordinator
-├── run_gui.bat                       # One-click Windows launcher (starts the GUI)
-│
-├── circle_cluster.py                 # Core engine: Circle Brownian aggregation
-├── triangle_cluster.py               # Core engine: Triangle aggregation (various types)
-├── triangle_same_size_cluster.py     # Core engine: Equal-sized triangle aggregation
-├── square_cluster.py                 # Core engine: Square particle aggregation
-├── rectangle_cluster.py              # Core engine: Rectangle particle aggregation
-├── ellipse_cluster.py                # Core engine: Ellipse aggregation
-├── superellipse_cluster.py           # Core engine: Superellipse aggregation
-│
-├── square_circle_cluster.py          # Mixture engine: Square-Circle aggregation
-├── triangle_circle_cluster.py        # Mixture engine: Triangle-Circle aggregation
-├── ellipse_circle_cluster.py         # Mixture engine: Ellipse-Circle aggregation
-├── rectangle_circle_cluster.py       # Mixture engine: Rectangle-Circle aggregation
-│
-├── collisions.py                     # High-performance 2D collision detection & SAT algorithms
-├── collisions2.py                    # Collision helper routines for rectangles
-├── collisionsellipse.py              # Elliptical collision detection utilities
-├── collisions_rect_circle.py         # Rectangle-Circle collision utilities
-│
-├── requirements.txt                  # Python dependencies
-├── .gitignore                        # Standard Git ignore file
-└── README.md                         # Project documentation
-```
-
----
-
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
 Ensure you have **Python 3.9+** installed.
 
-Clone or download this repository, open a terminal in this directory, and install dependencies:
+Clone this repository, navigate into the directory, and install the dependencies:
 ```bash
+git clone https://github.com/Nimish-ctrl/DLCA-Simulation.git
+cd DLCA-Simulation
 pip install -r requirements.txt
 ```
 
-### 2. Launch the GUI
+### 2. Launch the Application
 - **On Windows**: Simply double-click **`run_gui.bat`**.
 - **Via Terminal**:
   ```bash
   python -m streamlit run app.py
   ```
 
-Once launched, your default web browser will automatically open:
+Your browser will automatically open to:
 ```text
 http://localhost:8501
 ```
 
 ---
 
-## ⚙️ Using the GUI
+## ⚙️ How to Use the GUI
 
-1. **Select Geometry & Parameters**: Use the left sidebar to choose particle shapes, dispersion mode, arena domain size, and initial packing density (by area fraction $\phi$ or particle count $N$).
+1. **Select Geometry & Parameters**: Use the left sidebar to choose particle shapes, dispersion mode, arena domain dimensions, and initial packing density (by area fraction $\phi$ or particle count $N$).
 2. **Launch Simulation**: Click **`▶ Launch DLCA Simulation`**.
 3. **Monitor Live Progress**: Watch the live step-by-step counter, cluster merge rate, speed, ETA, and real-time kinetic decay curve.
 4. **Instant Halting (Stop/Cancel)**: Click **`⏹ Stop Simulation`** at any point. All intermediate particle coordinates, trajectories, and plots are safely preserved on disk.

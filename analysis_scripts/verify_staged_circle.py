@@ -6,8 +6,8 @@ import os
 import glob
 import math
 import numpy as np
-import staged_circle_cluster
-import circle_cluster
+import engines.staged_circle_cluster as staged_circle_cluster
+import engines.circle_cluster as circle_cluster
 
 def verify_stage1_outputs(num_batches=8, base_save_dir="sim_npy_out"):
     print("\n--- Verifying Stage 1 Outputs ---")
@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
     # 2. Test Video Rendering
     print("\n--- Testing make_circle_video Rendering ---")
-    import make_circle_video
+    import video_renderers.make_circle_video as make_circle_video
     vid_file = make_circle_video.create_video(
         data_dir="sim_npy_out/test_staged/stage2_combined",
         tag="stage2_N1600",
